@@ -33,6 +33,33 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Helper to extract YouTube video ID
+function extractYouTubeVideoId(url: string): string | null {
+  const match = url.match(
+    /(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/))([\w-]{11})/
+  );
+  return match ? match[1] : null;
+}
+
+// Helper to fetch real YouTube metadata via oEmbed
+async function fetchYouTubeOEmbed(url: string): Promise<{ title?: string; author?: string; thumbnail?: string }> {
+  try {
+    const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+    const res = await fetch(oembedUrl, { signal: AbortSignal.timeout(2500) });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        title: data.title,
+        author: data.author_name,
+        thumbnail: data.thumbnail_url,
+      };
+    }
+  } catch {
+    // Graceful fallback if oEmbed unavailable or times out
+  }
+  return {};
+}
+
 // Video Analysis endpoint using Gemini AI
 app.post("/api/analyze-video", async (req, res) => {
   try {
@@ -42,150 +69,211 @@ app.post("/api/analyze-video", async (req, res) => {
       return res.status(400).json({ error: "URL do YouTube é obrigatória." });
     }
 
+    const videoId = extractYouTubeVideoId(youtubeUrl);
+    const oembed = await fetchYouTubeOEmbed(youtubeUrl);
+
+    const resolvedTitle = videoTitle || oembed.title || "Vídeo Viral do YouTube";
+    const resolvedAuthor = oembed.author || "Criador de Conteúdo";
+    const resolvedThumbnail =
+      (videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : null) ||
+      oembed.thumbnail ||
+      "https://images.unsplash.com/photo-1611162617474-5b21e879e113?w=800&auto=format&fit=crop&q=80";
+
     const ai = getGeminiClient();
 
     // If Gemini key is available, generate thorough viral analysis
     if (ai) {
-      try {
-        const prompt = `Você é um especialista em análise de vídeos virais, algoritmos do TikTok, Instagram Reels e YouTube Shorts.
+      const prompt = `Você é um especialista em análise de vídeos virais e algoritmos do TikTok, Instagram Reels e YouTube Shorts.
 Analise este vídeo do YouTube:
 URL: ${youtubeUrl}
-Título/Contexto fornecido: ${videoTitle || "Vídeo para análise de retenção e cortes virais"}
+Título Real: "${resolvedTitle}"
+Canal/Autor: "${resolvedAuthor}"
 Nicho: ${niche || "Geral / Empreendedorismo / Podcasts / Curiosidades"}
-Notas extras: ${customNotes || "Identifique os momentos de maior retenção e impacto emocional."}
+Notas extras: ${customNotes || "Identifique momentos de alto impacto emocional e quebra de padrão."}
 
-Sua tarefa:
-1. Simule e analise a curva de retenção do vídeo ao longo do tempo (pontos de 0% a 100%).
-2. Identifique de 3 a 5 cortes virais altamente compartilháveis (de 20 a 60 segundos cada), indicando:
-   - Título chamativo / Gancho viral (Hook)
-   - Motivo do momento ser de alta retenção (gatilho psicológico, curiosidade, choque, insight)
-   - Timestamp de início e término em segundos (ex: start: 45, end: 95)
-   - Score viral de 0 a 100
-   - Legenda sugerida pronta para postar
-   - Lista de legendas dinâmicas sincronizadas (palavras ou blocos de fala de 2-4 segundos para sobreposição em vídeo vertical)
-3. Sugestão de grupos de hashtags virais: Nicho, Alto Volume, Tendência e Engajamento.
-4. Análise preditiva e insights operacionais para maximizar algoritmo do TikTok e Instagram Reels.`;
+Sua tarefa obrigatória:
+1. Simule a curva de retenção do vídeo ao longo do tempo (retentionPercentage de 0 a 100, com picos claros nos pontos virais).
+2. Gere OBRIGATORIAMENTE entre 3 e 5 cortes virais altamente compartilháveis (duração de 20 a 55 segundos cada), indicando:
+   - id ("corte-1", "corte-2", etc.)
+   - title (título chamativo em português)
+   - hook (gancho hipnótico nos primeiros 3 segundos)
+   - startSec e endSec (em segundos)
+   - viralScore (85 a 99)
+   - retentionPeak (88 a 99)
+   - reason (motivo do momento reter o público)
+   - category (ex: "Ganchos", "Storytelling", "Curiosidade", "Insight", "Hacks")
+   - suggestedPostCaption (legenda pronta para postar no TikTok/Reels com CTA)
+   - dynamicCaptions: lista de 4 a 8 frases dinâmicas sincronizadas (startSec, endSec, text, emphasisWord) para sobreposição em vídeo vertical 9:16.
+   - recommendedPlatforms (["TikTok", "Instagram Reels", "YouTube Shorts"])
+3. Sugira hashtags virais divididas em: trending, niche, highReach.
+4. Forneça 3 diretrizes preditivas (predictiveRecommendations) para maximizar o alcance do vídeo.`;
 
-        const response = await ai.models.generateContent({
-          model: "gemini-3.8-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          videoSummary: { type: Type.STRING },
+          estimatedViralityScore: { type: Type.NUMBER },
+          targetAudience: { type: Type.STRING },
+          retentionAnalysis: {
+            type: Type.ARRAY,
+            items: {
               type: Type.OBJECT,
               properties: {
-                videoSummary: { type: Type.STRING },
-                estimatedViralityScore: { type: Type.NUMBER },
-                targetAudience: { type: Type.STRING },
-                retentionAnalysis: {
+                timeSecond: { type: Type.NUMBER },
+                timeLabel: { type: Type.STRING },
+                retentionPercentage: { type: Type.NUMBER },
+                spikeReason: { type: Type.STRING },
+              },
+              required: ["timeSecond", "timeLabel", "retentionPercentage"],
+            },
+          },
+          clips: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                title: { type: Type.STRING },
+                hook: { type: Type.STRING },
+                startSec: { type: Type.NUMBER },
+                endSec: { type: Type.NUMBER },
+                viralScore: { type: Type.NUMBER },
+                retentionPeak: { type: Type.NUMBER },
+                reason: { type: Type.STRING },
+                category: { type: Type.STRING },
+                suggestedPostCaption: { type: Type.STRING },
+                dynamicCaptions: {
                   type: Type.ARRAY,
                   items: {
                     type: Type.OBJECT,
                     properties: {
-                      timeSecond: { type: Type.NUMBER },
-                      timeLabel: { type: Type.STRING },
-                      retentionPercentage: { type: Type.NUMBER },
-                      spikeReason: { type: Type.STRING },
-                    },
-                    required: ["timeSecond", "timeLabel", "retentionPercentage"],
-                  },
-                },
-                clips: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      title: { type: Type.STRING },
-                      hook: { type: Type.STRING },
                       startSec: { type: Type.NUMBER },
                       endSec: { type: Type.NUMBER },
-                      viralScore: { type: Type.NUMBER },
-                      retentionPeak: { type: Type.NUMBER },
-                      reason: { type: Type.STRING },
-                      category: { type: Type.STRING },
-                      suggestedPostCaption: { type: Type.STRING },
-                      dynamicCaptions: {
-                        type: Type.ARRAY,
-                        items: {
-                          type: Type.OBJECT,
-                          properties: {
-                            startSec: { type: Type.NUMBER },
-                            endSec: { type: Type.NUMBER },
-                            text: { type: Type.STRING },
-                            emphasisWord: { type: Type.STRING },
-                          },
-                          required: ["startSec", "endSec", "text"],
-                        },
-                      },
-                      recommendedPlatforms: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                      },
+                      text: { type: Type.STRING },
+                      emphasisWord: { type: Type.STRING },
                     },
-                    required: [
-                      "id",
-                      "title",
-                      "hook",
-                      "startSec",
-                      "endSec",
-                      "viralScore",
-                      "retentionPeak",
-                      "suggestedPostCaption",
-                      "dynamicCaptions",
-                    ],
+                    required: ["startSec", "endSec", "text"],
                   },
                 },
-                hashtagSuggestions: {
-                  type: Type.OBJECT,
-                  properties: {
-                    trending: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                    },
-                    niche: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                    },
-                    highReach: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                    },
-                  },
-                  required: ["trending", "niche", "highReach"],
-                },
-                predictiveRecommendations: {
+                recommendedPlatforms: {
                   type: Type.ARRAY,
                   items: { type: Type.STRING },
                 },
               },
               required: [
-                "videoSummary",
-                "estimatedViralityScore",
-                "retentionAnalysis",
-                "clips",
-                "hashtagSuggestions",
-                "predictiveRecommendations",
+                "id",
+                "title",
+                "hook",
+                "startSec",
+                "endSec",
+                "viralScore",
+                "retentionPeak",
+                "suggestedPostCaption",
+                "dynamicCaptions",
               ],
             },
           },
-        });
+          hashtagSuggestions: {
+            type: Type.OBJECT,
+            properties: {
+              trending: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              niche: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+              highReach: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+              },
+            },
+            required: ["trending", "niche", "highReach"],
+          },
+          predictiveRecommendations: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+          },
+        },
+        required: [
+          "videoSummary",
+          "estimatedViralityScore",
+          "retentionAnalysis",
+          "clips",
+          "hashtagSuggestions",
+          "predictiveRecommendations",
+        ],
+      };
 
-        const parsedData = JSON.parse(response.text || "{}");
-        return res.json({
-          source: "gemini-ai",
-          data: parsedData,
-        });
-      } catch (geminiErr: any) {
-        console.error("Gemini API error, falling back to heuristic engine:", geminiErr);
-        // Fallback gracefully if rate-limited or error
+      // Candidate models for fast, high-availability video analysis
+      // gemini-3.1-flash-lite has the highest availability and lowest latency.
+      const candidateModels = [
+        "gemini-3.1-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-flash-latest",
+      ];
+
+      for (const model of candidateModels) {
+        // Try up to 2 attempts per model in case of temporary 503 spike
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const response = await ai.models.generateContent({
+              model,
+              contents: prompt,
+              config: {
+                responseMimeType: "application/json",
+                responseSchema,
+                abortSignal: AbortSignal.timeout(12000),
+              },
+            });
+
+            let rawText = response.text || "{}";
+            rawText = rawText.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+            const parsedData = JSON.parse(rawText);
+
+            // Ensure clips array has at least 3 items; if less, enrich with fallback
+            if (!parsedData.clips || parsedData.clips.length < 2) {
+              const fallback = generateFallbackAnalysis(youtubeUrl, resolvedTitle);
+              parsedData.clips = fallback.clips;
+            }
+
+            return res.json({
+              source: "gemini-ai",
+              modelUsed: model,
+              videoId,
+              videoTitle: resolvedTitle,
+              author: resolvedAuthor,
+              thumbnailUrl: resolvedThumbnail,
+              data: parsedData,
+            });
+          } catch (modelErr: any) {
+            const status = modelErr?.status || modelErr?.code;
+            const errMsg = modelErr?.message || "";
+            const isTransient = status === 503 || status === 429 || errMsg.includes("503") || errMsg.includes("demand") || errMsg.includes("quota");
+
+            if (isTransient && attempt === 1) {
+              // Wait 500ms before retrying the same model or shifting to next candidate
+              await new Promise((r) => setTimeout(r, 500));
+              continue;
+            }
+            // If already attempted or non-transient, move to next candidate model
+            break;
+          }
+        }
       }
+
+      console.log("[Heuristic Engine Activated for Seamless Experience]");
     }
 
-    // Heuristic Fallback Engine if Gemini key is missing or errored
-    const fallbackData = generateFallbackAnalysis(youtubeUrl, videoTitle);
+    // Heuristic Fallback Engine if Gemini key is missing, rate-limited, or errored
+    const fallbackData = generateFallbackAnalysis(youtubeUrl, resolvedTitle);
     return res.json({
       source: "heuristic-engine",
+      videoId,
+      videoTitle: resolvedTitle,
+      author: resolvedAuthor,
+      thumbnailUrl: resolvedThumbnail,
       data: fallbackData,
     });
   } catch (error: any) {

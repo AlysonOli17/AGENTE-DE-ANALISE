@@ -15,12 +15,27 @@ import {
   Sliders,
   Type,
   Maximize2,
+  Film,
+  FileText,
+  Copy,
+  ExternalLink,
+  Tv,
+  Smartphone,
+  Check,
 } from 'lucide-react';
-import { ViralClip, CaptionStyle } from '../types';
+import { ViralClip, CaptionStyle, VideoAnalysisResult } from '../types';
+import {
+  downloadSrtSubtitles,
+  downloadPostPackage,
+  renderAndDownloadVerticalVideo,
+} from '../utils/exportClipVideo';
 
 interface VerticalClipPlayerProps {
   clip: ViralClip;
   thumbnailUrl: string;
+  videoId?: string;
+  videoTitle?: string;
+  analysis?: VideoAnalysisResult;
   onExportToSocial: (clip: ViralClip, platform: 'tiktok' | 'instagram' | 'youtube') => void;
   onSchedulePost: (clip: ViralClip) => void;
 }
@@ -28,6 +43,9 @@ interface VerticalClipPlayerProps {
 export const VerticalClipPlayer: React.FC<VerticalClipPlayerProps> = ({
   clip,
   thumbnailUrl,
+  videoId,
+  videoTitle,
+  analysis,
   onExportToSocial,
   onSchedulePost,
 }) => {
@@ -38,6 +56,14 @@ export const VerticalClipPlayer: React.FC<VerticalClipPlayerProps> = ({
   const [exportSuccess, setExportSuccess] = useState<string | null>(null);
   const [captionScale, setCaptionScale] = useState<number>(1);
   const [activeWordIndex, setActiveWordIndex] = useState(0);
+
+  // New state for downloads and player view mode
+  const [previewMode, setPreviewMode] = useState<'vertical' | 'youtube'>('vertical');
+  const [isRenderingVideo, setIsRenderingVideo] = useState(false);
+  const [renderProgress, setRenderProgress] = useState(0);
+  const [renderStatus, setRenderStatus] = useState('');
+  const [copiedCaption, setCopiedCaption] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   const duration = Math.max(1, clip.endSec - clip.startSec);
   const relativeTime = currentTime - clip.startSec;
@@ -175,109 +201,188 @@ export const VerticalClipPlayer: React.FC<VerticalClipPlayerProps> = ({
     }
   };
 
+  const handleDownloadVideo = async () => {
+    setIsRenderingVideo(true);
+    setRenderProgress(5);
+    setRenderStatus('Iniciando renderizador...');
+    try {
+      await renderAndDownloadVerticalVideo(
+        clip,
+        thumbnailUrl,
+        captionStyle,
+        (progress, text) => {
+          setRenderProgress(progress);
+          setRenderStatus(text);
+        }
+      );
+      setTimeout(() => {
+        setIsRenderingVideo(false);
+      }, 1500);
+    } catch (err: any) {
+      console.error('Erro ao baixar vídeo:', err);
+      alert('Não foi possível renderizar o vídeo automaticamente neste navegador. Você pode baixar o arquivo .SRT e manifesto abaixo!');
+      setIsRenderingVideo(false);
+    }
+  };
+
+  const handleCopyCaption = () => {
+    const textToCopy = `${clip.suggestedPostCaption}\n\n${analysis?.hashtagSuggestions?.trending?.join(' ') || '#viral #fyp #reels'}`;
+    navigator.clipboard.writeText(textToCopy);
+    setCopiedCaption(true);
+    setTimeout(() => setCopiedCaption(false), 3000);
+  };
+
   return (
     <div className="flex flex-col lg:flex-row gap-6 items-center lg:items-start justify-center">
       {/* 9:16 Vertical Smartphone Canvas Simulation */}
-      <div className="relative w-[300px] sm:w-[320px] h-[580px] sm:h-[620px] shrink-0 rounded-3xl border-4 border-slate-800 bg-black overflow-hidden shadow-2xl shadow-rose-950/20">
-        {/* Mock Video Feed / Frame */}
-        <div className="absolute inset-0 z-0">
-          <img
-            src={thumbnailUrl}
-            alt="Vídeo Viral"
-            className={`h-full w-full object-cover transition-transform duration-700 ${
-              isPlaying ? 'scale-105 filter brightness-90' : 'scale-100 filter brightness-75'
-            }`}
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/80" />
-        </div>
-
-        {/* Top Header info (TikTok/Reels format) */}
-        <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between text-white drop-shadow-md">
-          <div className="flex items-center gap-2">
-            <span className="flex h-2 w-2 rounded-full bg-rose-500 animate-ping" />
-            <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-bold tracking-wider backdrop-blur-sm">
-              SCORE: {clip.viralScore}% VIRAL
-            </span>
+      <div className="flex flex-col items-center gap-3">
+        {/* Toggle Mode: Vertical 9:16 vs YouTube Original */}
+        {videoId && (
+          <div className="flex items-center gap-1 rounded-xl bg-slate-900 border border-slate-800 p-1 text-xs">
+            <button
+              onClick={() => setPreviewMode('vertical')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all ${
+                previewMode === 'vertical'
+                  ? 'bg-rose-600 text-white shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Smartphone className="h-3.5 w-3.5" />
+              <span>Estúdio Vertical 9:16</span>
+            </button>
+            <button
+              onClick={() => setPreviewMode('youtube')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all ${
+                previewMode === 'youtube'
+                  ? 'bg-red-600 text-white shadow'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Tv className="h-3.5 w-3.5" />
+              <span>Vídeo Real do YouTube</span>
+            </button>
           </div>
-          <span className="text-[11px] font-mono font-bold bg-black/50 px-2 py-0.5 rounded">
-            {Math.floor(relativeTime)}s / {Math.floor(duration)}s
-          </span>
-        </div>
+        )}
 
-        {/* Center: Dynamic Captions Overlay (The Core Feature) */}
-        <div
-          className="absolute inset-x-2 top-1/2 -translate-y-1/2 z-20 pointer-events-none flex flex-col items-center justify-center min-h-[90px]"
-          style={{ transform: `scale(${captionScale})` }}
-        >
-          {renderStyledCaption()}
-        </div>
+        <div className="relative w-[300px] sm:w-[320px] h-[580px] sm:h-[620px] shrink-0 rounded-3xl border-4 border-slate-800 bg-black overflow-hidden shadow-2xl shadow-rose-950/20">
+          {previewMode === 'youtube' && videoId ? (
+            <div className="relative w-full h-full bg-black flex flex-col justify-center">
+              <iframe
+                src={`https://www.youtube-nocookie.com/embed/${videoId}?start=${clip.startSec}&end=${clip.endSec}&autoplay=1&controls=1&rel=0&modestbranding=1`}
+                title={clip.title}
+                className="w-full h-full object-cover"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+              />
+              <div className="absolute top-2 left-2 right-2 z-10 flex items-center justify-between text-[11px] font-mono text-white bg-black/80 backdrop-blur px-2.5 py-1 rounded-md border border-slate-700">
+                <span className="text-rose-400 font-bold">Corte Selecionado:</span>
+                <span>{Math.floor(clip.startSec / 60)}:{(clip.startSec % 60).toString().padStart(2, '0')} - {Math.floor(clip.endSec / 60)}:{(clip.endSec % 60).toString().padStart(2, '0')}</span>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Mock Video Feed / Frame */}
+              <div className="absolute inset-0 z-0">
+                <img
+                  src={thumbnailUrl}
+                  alt="Vídeo Viral"
+                  className={`h-full w-full object-cover transition-transform duration-700 ${
+                    isPlaying ? 'scale-105 filter brightness-90' : 'scale-100 filter brightness-75'
+                  }`}
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/80" />
+              </div>
 
-        {/* Right side social interactions (TikTok & Reels Mock) */}
-        <div className="absolute right-3 bottom-20 z-10 flex flex-col items-center gap-4 text-white">
-          <button className="flex flex-col items-center gap-1 group">
-            <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-rose-600 transition-colors">
-              <Heart className="h-5 w-5 text-rose-500 fill-rose-500" />
-            </div>
-            <span className="text-[10px] font-semibold">142.8k</span>
-          </button>
-          <button className="flex flex-col items-center gap-1 group">
-            <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-slate-800 transition-colors">
-              <MessageCircle className="h-5 w-5 text-white" />
-            </div>
-            <span className="text-[10px] font-semibold">3.4k</span>
-          </button>
-          <button className="flex flex-col items-center gap-1 group">
-            <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-amber-600 transition-colors">
-              <Bookmark className="h-5 w-5 text-amber-400 fill-amber-400" />
-            </div>
-            <span className="text-[10px] font-semibold">18.9k</span>
-          </button>
-          <button className="flex flex-col items-center gap-1 group">
-            <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-indigo-600 transition-colors">
-              <Share2 className="h-5 w-5 text-white" />
-            </div>
-            <span className="text-[10px] font-semibold">Partilhar</span>
-          </button>
-          <div className="rounded-full border-2 border-white/80 bg-slate-900 p-1.5 animate-spin-slow">
-            <Music2 className="h-4 w-4 text-rose-400" />
-          </div>
-        </div>
+              {/* Top Header info (TikTok/Reels format) */}
+              <div className="absolute top-4 left-4 right-4 z-10 flex items-center justify-between text-white drop-shadow-md">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2 w-2 rounded-full bg-rose-500 animate-ping" />
+                  <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-bold tracking-wider backdrop-blur-sm">
+                    SCORE: {clip.viralScore}% VIRAL
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono font-bold bg-black/50 px-2 py-0.5 rounded">
+                  {Math.floor(relativeTime)}s / {Math.floor(duration)}s
+                </span>
+              </div>
 
-        {/* Bottom Metadata & Hook Preview */}
-        <div className="absolute bottom-4 left-3 right-16 z-10 text-white">
-          <h4 className="text-xs font-bold drop-shadow-md line-clamp-1">{clip.title}</h4>
-          <p className="text-[11px] text-slate-200 drop-shadow line-clamp-2 mt-0.5">
-            {clip.hook}
-          </p>
-          <div className="mt-1 flex items-center gap-1 text-[10px] text-rose-300 font-mono">
-            <Sparkles className="h-3 w-3" />
-            Pico de retenção aos {clip.startSec}s ({clip.retentionPeak}%)
-          </div>
-        </div>
+              {/* Center: Dynamic Captions Overlay (The Core Feature) */}
+              <div
+                className="absolute inset-x-2 top-1/2 -translate-y-1/2 z-20 pointer-events-none flex flex-col items-center justify-center min-h-[90px]"
+                style={{ transform: `scale(${captionScale})` }}
+              >
+                {renderStyledCaption()}
+              </div>
 
-        {/* Scrubber Progress Bar */}
-        <div className="absolute bottom-0 inset-x-0 h-1.5 bg-slate-800/80 z-20">
-          <div
-            className="h-full bg-rose-500 transition-all duration-200"
-            style={{ width: `${(relativeTime / duration) * 100}%` }}
-          />
-        </div>
+              {/* Right side social interactions (TikTok & Reels Mock) */}
+              <div className="absolute right-3 bottom-20 z-10 flex flex-col items-center gap-4 text-white">
+                <button className="flex flex-col items-center gap-1 group">
+                  <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-rose-600 transition-colors">
+                    <Heart className="h-5 w-5 text-rose-500 fill-rose-500" />
+                  </div>
+                  <span className="text-[10px] font-semibold">142.8k</span>
+                </button>
+                <button className="flex flex-col items-center gap-1 group">
+                  <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-slate-800 transition-colors">
+                    <MessageCircle className="h-5 w-5 text-white" />
+                  </div>
+                  <span className="text-[10px] font-semibold">3.4k</span>
+                </button>
+                <button className="flex flex-col items-center gap-1 group">
+                  <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-amber-600 transition-colors">
+                    <Bookmark className="h-5 w-5 text-amber-400 fill-amber-400" />
+                  </div>
+                  <span className="text-[10px] font-semibold">18.9k</span>
+                </button>
+                <button className="flex flex-col items-center gap-1 group">
+                  <div className="rounded-full bg-black/40 p-2.5 backdrop-blur-sm group-hover:bg-indigo-600 transition-colors">
+                    <Share2 className="h-5 w-5 text-white" />
+                  </div>
+                  <span className="text-[10px] font-semibold">Partilhar</span>
+                </button>
+                <div className="rounded-full border-2 border-white/80 bg-slate-900 p-1.5 animate-spin-slow">
+                  <Music2 className="h-4 w-4 text-rose-400" />
+                </div>
+              </div>
 
-        {/* Play/Pause center overlay control */}
-        <button
-          onClick={() => setIsPlaying(!isPlaying)}
-          className="absolute inset-0 z-10 flex items-center justify-center bg-transparent group"
-          title={isPlaying ? 'Pausar' : 'Reproduzir'}
-        >
-          {!isPlaying && (
-            <div className="rounded-full bg-black/60 p-4 backdrop-blur-md text-white shadow-2xl scale-110">
-              <Play className="h-8 w-8 fill-white" />
-            </div>
+              {/* Bottom Metadata & Hook Preview */}
+              <div className="absolute bottom-4 left-3 right-16 z-10 text-white">
+                <h4 className="text-xs font-bold drop-shadow-md line-clamp-1">{clip.title}</h4>
+                <p className="text-[11px] text-slate-200 drop-shadow line-clamp-2 mt-0.5">
+                  {clip.hook}
+                </p>
+                <div className="mt-1 flex items-center gap-1 text-[10px] text-rose-300 font-mono">
+                  <Sparkles className="h-3 w-3" />
+                  Pico de retenção aos {clip.startSec}s ({clip.retentionPeak}%)
+                </div>
+              </div>
+
+              {/* Scrubber Progress Bar */}
+              <div className="absolute bottom-0 inset-x-0 h-1.5 bg-slate-800/80 z-20">
+                <div
+                  className="h-full bg-rose-500 transition-all duration-200"
+                  style={{ width: `${(relativeTime / duration) * 100}%` }}
+                />
+              </div>
+
+              {/* Play/Pause center overlay control */}
+              <button
+                onClick={() => setIsPlaying(!isPlaying)}
+                className="absolute inset-0 z-10 flex items-center justify-center bg-transparent group"
+                title={isPlaying ? 'Pausar' : 'Reproduzir'}
+              >
+                {!isPlaying && (
+                  <div className="rounded-full bg-black/60 p-4 backdrop-blur-md text-white shadow-2xl scale-110">
+                    <Play className="h-8 w-8 fill-white" />
+                  </div>
+                )}
+              </button>
+            </>
           )}
-        </button>
+        </div>
       </div>
 
-      {/* Control Panel & Social Export Options */}
+      {/* Control Panel, Downloads & Social Export Options */}
       <div className="flex-1 w-full max-w-xl space-y-5">
         {/* Header of Clip */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg">
@@ -323,22 +428,22 @@ export const VerticalClipPlayer: React.FC<VerticalClipPlayerProps> = ({
           </div>
         </div>
 
-        {/* Dynamic Caption Styles Chooser (Requested Feature) */}
+        {/* Dynamic Caption Styles Chooser */}
         <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Type className="h-4 w-4 text-amber-400" />
               <h4 className="text-sm font-bold text-white">Estilos de Legendas Dinâmicas</h4>
             </div>
-            <span className="text-[11px] text-slate-400">Estilo Viral Selecionado</span>
+            <span className="text-[11px] text-slate-400">Estilo Ativo no Corte</span>
           </div>
 
           <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
             {[
               { id: 'hormozi', name: 'Hormozi Pop', desc: 'Amarelo vivo + Pop', color: 'border-yellow-500/50 bg-yellow-950/20 text-yellow-300' },
-              { id: 'karaoke', name: 'Karaokê Glow', desc: 'Preenchimento em tempo real', color: 'border-emerald-500/50 bg-emerald-950/20 text-emerald-300' },
+              { id: 'karaoke', name: 'Karaokê Glow', desc: 'Preenchimento dinâmico', color: 'border-emerald-500/50 bg-emerald-950/20 text-emerald-300' },
               { id: 'neon', name: 'Cyber Neon', desc: 'Ciano elétrico com brilho', color: 'border-cyan-500/50 bg-cyan-950/20 text-cyan-300' },
-              { id: 'fire', name: 'Fire Boost', desc: 'Gradiente quente pulsante', color: 'border-rose-500/50 bg-rose-950/20 text-rose-300' },
+              { id: 'fire', name: 'Fire Boost', desc: 'Gradiente pulsante', color: 'border-rose-500/50 bg-rose-950/20 text-rose-300' },
               { id: 'minimal', name: 'Minimal Dark', desc: 'Fundo preto translúcido', color: 'border-slate-600 bg-slate-800 text-slate-200' },
             ].map((style) => (
               <button
@@ -376,16 +481,104 @@ export const VerticalClipPlayer: React.FC<VerticalClipPlayerProps> = ({
           </div>
         </div>
 
-        {/* Direct Export to TikTok & Instagram Reels (Requested Feature) */}
+        {/* SECTION: CENTRAL DE DOWNLOAD DO CORTE (Direct Solution for User) */}
+        <div className="rounded-2xl border-2 border-emerald-500/40 bg-gradient-to-br from-slate-900 via-emerald-950/20 to-slate-900 p-5 shadow-xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Download className="h-5 w-5 text-emerald-400" />
+              <h4 className="text-base font-extrabold text-white">Baixar Corte & Arquivos de Edição</h4>
+            </div>
+            <span className="rounded-full bg-emerald-500/20 border border-emerald-500/30 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
+              Download Imediato
+            </span>
+          </div>
+          <p className="text-xs text-slate-300 mt-1">
+            Exporte o vídeo renderizado em 9:16 com legendas ou baixe arquivos para CapCut e Premiere.
+          </p>
+
+          {/* Progress Modal / Banner while rendering */}
+          {isRenderingVideo && (
+            <div className="mt-3 rounded-xl border border-rose-500/50 bg-slate-950 p-4 shadow-lg animate-pulse">
+              <div className="flex items-center justify-between text-xs text-white mb-2">
+                <span className="font-bold flex items-center gap-2">
+                  <Film className="h-4 w-4 text-rose-500 animate-spin" />
+                  {renderStatus}
+                </span>
+                <span className="font-mono text-rose-400 font-bold">{renderProgress}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-slate-800 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-rose-600 to-amber-500 transition-all duration-300"
+                  style={{ width: `${renderProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Action Download Buttons Grid */}
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Download Video Button */}
+            <button
+              id="download-clip-video-btn"
+              disabled={isRenderingVideo}
+              onClick={handleDownloadVideo}
+              className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 p-3 text-xs font-extrabold text-white shadow-lg shadow-emerald-950/40 hover:brightness-110 active:scale-98 transition-all disabled:opacity-50"
+            >
+              <Film className="h-4 w-4" />
+              <span>Baixar Vídeo do Corte (9:16)</span>
+            </button>
+
+            {/* Download SRT Subtitles */}
+            <button
+              id="download-clip-srt-btn"
+              onClick={() => downloadSrtSubtitles(clip)}
+              className="flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/90 p-3 text-xs font-bold text-slate-100 hover:bg-slate-700 hover:text-white transition-all shadow"
+            >
+              <FileText className="h-4 w-4 text-amber-400" />
+              <span>Baixar Legendas (.SRT CapCut)</span>
+            </button>
+
+            {/* Download Post Package TXT */}
+            <button
+              id="download-clip-txt-btn"
+              onClick={() => analysis && downloadPostPackage(clip, analysis)}
+              className="flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/90 p-3 text-xs font-bold text-slate-100 hover:bg-slate-700 hover:text-white transition-all shadow"
+            >
+              <FileText className="h-4 w-4 text-cyan-400" />
+              <span>Baixar Roteiro & Copy (.TXT)</span>
+            </button>
+
+            {/* Copy Caption */}
+            <button
+              id="copy-clip-caption-btn"
+              onClick={handleCopyCaption}
+              className="flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/90 p-3 text-xs font-bold text-slate-100 hover:bg-slate-700 hover:text-white transition-all shadow"
+            >
+              {copiedCaption ? (
+                <>
+                  <Check className="h-4 w-4 text-emerald-400" />
+                  <span className="text-emerald-400">Legenda Copiada!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-4 w-4 text-rose-400" />
+                  <span>Copiar Legenda Pronta</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Direct Export to TikTok & Instagram Reels */}
         <div className="rounded-2xl border border-rose-500/30 bg-gradient-to-b from-rose-950/30 to-slate-900 p-5 shadow-lg">
           <div className="flex items-center justify-between">
             <div>
               <h4 className="text-sm font-bold text-white flex items-center gap-2">
                 <Share2 className="h-4 w-4 text-rose-400" />
-                Exportação Direta para Redes Sociais
+                Exportação Automática para Redes Sociais
               </h4>
               <p className="text-xs text-slate-400 mt-0.5">
-                Formatação automática em 1080x1920 (9:16), 60 FPS com legendas dinâmicas embutidas.
+                Envio direto com parâmetros otimizados para o algoritmo.
               </p>
             </div>
           </div>
@@ -433,7 +626,6 @@ export const VerticalClipPlayer: React.FC<VerticalClipPlayerProps> = ({
 
             <button
               onClick={() => {
-                // Download clip spec & captions as JSON
                 const blob = new Blob([JSON.stringify(clip, null, 2)], { type: 'application/json' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -444,7 +636,7 @@ export const VerticalClipPlayer: React.FC<VerticalClipPlayerProps> = ({
               className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white"
             >
               <Download className="h-3.5 w-3.5" />
-              Baixar Manifesto (.json / .srt)
+              Baixar Manifesto (.JSON)
             </button>
           </div>
 
