@@ -1,0 +1,6 @@
+{
+  "name": "ViralClip AI - Agente de Cortes & Métricas Virais",
+  "description": "Agente inteligente para análise de vídeos do YouTube, detecção de momentos de alta retenção, geração de cortes automáticos, legendas dinâmicas, exportação TikTok/Reels, agendamento e dashboard de métricas em tempo real.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
